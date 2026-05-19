@@ -1,0 +1,53 @@
+<#
+.SYNOPSIS
+    Habilita "Fallback to internet" buscando en TODAS las zonas DNS de la suscripción.
+#>
+
+Set-AzContext -SubscriptionName "Desarrollo"
+$linkName = "l-vnet-privatednsresolver-dev-eastus-001"
+
+Write-Host "Buscando todas las zonas DNS privadas en la suscripción 'Desarrollo'..." -ForegroundColor Cyan
+# Al quitar -ResourceGroupName, obtenemos las zonas de toda la suscripción
+$zonasDNS = Get-AzPrivateDnsZone 
+
+foreach ($zona in $zonasDNS) {
+    # Obtenemos dinámicamente el RG donde vive esta zona en particular
+    $rgDeLaZona = $zona.ResourceGroupName
+
+    # Buscamos si existe el vínculo específico en esta zona
+    $link = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $rgDeLaZona -ZoneName $zona.Name -Name $linkName -ErrorAction SilentlyContinue
+    
+    if ($link) {
+        Write-Host "Habilitando 'Fallback to internet' en la zona '$($zona.Name)' (RG: $rgDeLaZona)..."
+        Set-AzPrivateDnsVirtualNetworkLink -Name $link.Name -ResourceGroupName $rgDeLaZona -ZoneName $zona.Name -ResolutionPolicy "NxDomainRedirect" | Out-Null
+        Write-Host "✅ Actualización completada para $($zona.Name)." -ForegroundColor Green
+    }
+}
+Write-Host "Proceso de habilitación finalizado." -ForegroundColor Cyan
+
+
+#Deshabilita 
+
+<#
+.SYNOPSIS
+    Deshabilita "Fallback to internet" buscando en TODAS las zonas DNS de la suscripción.
+#>
+
+Set-AzContext -SubscriptionName "Desarrollo"
+$linkName = "l-vnet-privatednsresolver-dev-eastus-001"
+
+Write-Host "Buscando todas las zonas DNS privadas en la suscripción 'Desarrollo'..." -ForegroundColor Cyan
+$zonasDNS = Get-AzPrivateDnsZone 
+
+foreach ($zona in $zonasDNS) {
+    $rgDeLaZona = $zona.ResourceGroupName
+
+    $link = Get-AzPrivateDnsVirtualNetworkLink -ResourceGroupName $rgDeLaZona -ZoneName $zona.Name -Name $linkName -ErrorAction SilentlyContinue
+    
+    if ($link) {
+        Write-Host "Deshabilitando 'Fallback to internet' en la zona '$($zona.Name)' (RG: $rgDeLaZona)..."
+        Set-AzPrivateDnsVirtualNetworkLink -Name $link.Name -ResourceGroupName $rgDeLaZona -ZoneName $zona.Name -ResolutionPolicy "Default" | Out-Null
+        Write-Host "✅ Actualización completada para $($zona.Name)." -ForegroundColor Yellow
+    }
+}
+Write-Host "Proceso de deshabilitación finalizado." -ForegroundColor Cyan

@@ -1,0 +1,54 @@
+# 1. Configuración de la Suscripción
+$SubscriptionId = "Desarrollo"
+Set-AzContext -Subscription $SubscriptionId | Out-Null
+
+$Resultados = @()
+
+# 2. Obtener Zonas DNS Privadas
+Write-Host "Iniciando escaneo de Zonas y cruce con IPs Públicas..." -ForegroundColor Cyan
+$Zonas = Get-AzPrivateDnsZone
+
+foreach ($Zona in $Zonas) {
+    $RecordSets = Get-AzPrivateDnsRecordSet -ResourceGroupName $Zona.ResourceGroupName -ZoneName $Zona.Name -RecordType A
+    
+    foreach ($Record in $RecordSets) {
+        # Construir FQDN
+        $Fqdn = if ($Record.Name -eq "@") { $Zona.Name } else { "$($Record.Name).$($Zona.Name)" }
+        
+        foreach ($IpPrivada in $Record.Records.Ipv4Address) {
+            Write-Host "Procesando: $Fqdn" -ForegroundColor Gray
+            
+            $IpPublica = "No encontrada / Solo Interno"
+            
+            try {
+                # 3. Intentar resolver el FQDN usando DNS Público (Google)
+                # Nota: Si el FQDN contiene 'privatelink', intentamos resolver también el nombre base
+                $NombreABuscar = $Fqdn.Replace(".privatelink.", ".")
+                $ResolucionPublica = Resolve-DnsName -Name $NombreABuscar -Server 8.8.8.8 -ErrorAction SilentlyContinue | Where-Object {$_.Type -eq "A"}
+                
+                if ($ResolucionPublica) {
+                    $IpPublica = $ResolucionPublica[0].IPAddress
+                }
+            } catch {
+                $IpPublica = "N/A"
+            }
+
+            # Guardar resultados
+            $Resultados += [PSCustomObject]@{
+                'FQDN'              = $Fqdn
+                'IP_Privada_Azure'  = $IpPrivada
+                'IP_Publica_Global' = $IpPublica
+                'Zona_DNS'          = $Zona.Name
+                'Estado'            = if ($IpPrivada -eq $IpPublica) { "Error: IP Pública en Zona Privada" } else { "OK (Diferentes)" }
+            }
+        }
+    }
+}
+
+# 4. Exportar a CSV
+$Path = ".\Auditoria_IPs_Publicas_Privadas.csv"
+$Resultados | Export-Csv -Path $Path -NoTypeInformation -Encoding UTF8
+Write-Host "`nReporte generado con éxito en: $Path" -ForegroundColor Green
+
+# Mostrar un resumen en pantalla
+$Resultados | Select-Object FQDN, IP_Privada_Azure, IP_Publica_Global, Estado | Format-Table -AutoSize

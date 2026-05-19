@@ -1,0 +1,25 @@
+#!/bin/bash
+
+az account set --subscription "Desarrollo"
+LINK_NAME="l-vnet-privatednsresolver-dev-eastus-001"
+
+echo "Buscando todas las zonas DNS privadas en la suscripción..."
+# Extraemos el nombre de la zona y su grupo de recursos respectivo
+az network private-dns zone list --query "[].[name, resourceGroup]" -o tsv | while read -r ZONE_NAME RG_NAME; do
+
+    # Verificamos si el vínculo existe usando el RG dinámico de la zona
+    LINK_EXISTS=$(az network private-dns link vnet show --resource-group "$RG_NAME" --zone-name "$ZONE_NAME" --name "$LINK_NAME" --query "name" -o tsv 2>/dev/null)
+    
+    if [ -n "$LINK_EXISTS" ]; then
+        echo "Deshabilitando 'Fallback' para '$LINK_NAME' en '$ZONE_NAME' (RG: $RG_NAME)..."
+        az network private-dns link vnet update \
+            --resource-group "$RG_NAME" \
+            --zone-name "$ZONE_NAME" \
+            --name "$LINK_NAME" \
+            --resolution-policy Default \
+            --output none
+        echo "✅ Completado para $ZONE_NAME."
+    fi
+done
+
+echo "Proceso de deshabilitación finalizado."
