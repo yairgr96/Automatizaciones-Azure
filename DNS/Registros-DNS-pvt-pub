@@ -1,54 +1,188 @@
-# 1. Configuración de la Suscripción
+# 1. Configuración
+$ResolverIP = "10.64.1.20"
 $SubscriptionId = "Desarrollo"
+
+Write-Host "--- Conectando a la suscripción: $SubscriptionId ---" -ForegroundColor Cyan
 Set-AzContext -Subscription $SubscriptionId | Out-Null
+
+$Inventario = @()
+
+# 2. Extracción de Recursos
+Write-Host "--- Recopilando inventario PaaS de la suscripción ---" -ForegroundColor Cyan
+Write-Host "Buscando Storage, SQL, KeyVault, CosmosDB, WebApps, ACR y Synapse..." -ForegroundColor Gray
+
+<# $Storages   = Get-AzStorageAccount -ErrorAction SilentlyContinue
+$Vaults     = Get-AzKeyVault -ErrorAction SilentlyContinue
+$SqlServers = Get-AzSqlServer -ErrorAction SilentlyContinue
+$WebApps    = Get-AzWebApp -ErrorAction SilentlyContinue
+$ACRs       = Get-AzContainerRegistry -ErrorAction SilentlyContinue
+$Synapses   = Get-AzSynapseWorkspace -ErrorAction SilentlyContinue
+$CosmosDBs  = Get-AzCosmosDBAccount -ErrorAction SilentlyContinue #>
+# 2. Extracción de Recursos (Método robusto para evitar prompts)
+Write-Host "Buscando recursos en la suscripción..." -ForegroundColor Gray
+
+$Storages   = Get-AzStorageAccount -ErrorAction SilentlyContinue
+$Vaults     = Get-AzKeyVault -ErrorAction SilentlyContinue
+$SqlServers = Get-AzSqlServer -ErrorAction SilentlyContinue
+$WebApps    = Get-AzWebApp -ErrorAction SilentlyContinue
+$ACRs       = Get-AzContainerRegistry -ErrorAction SilentlyContinue
+
+# Para CosmosDB y Synapse usamos Get-AzResource para evitar que pida el ResourceGroupName
+$CosmosDBs  = Get-AzResource -ResourceType "Microsoft.DocumentDb/databaseAccounts" -ErrorAction SilentlyContinue
+$Synapses   = Get-AzResource -ResourceType "Microsoft.Synapse/workspaces" -ErrorAction SilentlyContinue
+
+# 3. Construir los FQDNs de cada recurso
+foreach($s in $Storages) { 
+    $Inventario += [PSCustomObject]@{ Nombre=$s.StorageAccountName; FQDN="$($s.StorageAccountName).blob.core.windows.net"; Tipo="Storage (Blob)" }
+    $Inventario += [PSCustomObject]@{ Nombre=$s.StorageAccountName; FQDN="$($s.StorageAccountName).file.core.windows.net"; Tipo="Storage (File)" }
+    $Inventario += [PSCustomObject]@{ Nombre=$s.StorageAccountName; FQDN="$($s.StorageAccountName).queue.core.windows.net"; Tipo="Storage (Queue)" }
+    $Inventario += [PSCustomObject]@{ Nombre=$s.StorageAccountName; FQDN="$($s.StorageAccountName).dfs.core.windows.net"; Tipo="Storage (DFS)" }
+    $Inventario += [PSCustomObject]@{ Nombre=$s.StorageAccountName; FQDN="$($s.StorageAccountName).web.core.windows.net"; Tipo="Storage (Web)" }
+}
+foreach($v in $Vaults) { $Inventario += [PSCustomObject]@{ Nombre=$v.VaultName; FQDN="$($v.VaultName).vault.azure.net"; Tipo="KeyVault" } }
+foreach($sql in $SqlServers) { $Inventario += [PSCustomObject]@{ Nombre=$sql.ServerName; FQDN="$($sql.ServerName).database.windows.net"; Tipo="SQL Server" } }
+foreach($app in $WebApps) { $Inventario += [PSCustomObject]@{ Nombre=$app.Name; FQDN=$app.DefaultHostName; Tipo="App Service" } }
+foreach($acr in $ACRs) { $Inventario += [PSCustomObject]@{ Nombre=$acr.Name; FQDN=$acr.LoginServer; Tipo="Container Registry" } }
+foreach($syn in $Synapses) { $Inventario += [PSCustomObject]@{ Nombre=$syn.Name; FQDN="$($syn.Name).dev.azuresynapse.net"; Tipo="Synapse (Dev)" } }
+foreach($cos in $CosmosDBs) { $Inventario += [PSCustomObject]@{ Nombre=$cos.Name; FQDN="$($cos.Name).documents.azure.com"; Tipo="CosmosDB" } }
+
+Write-Host "Se encontraron $($Inventario.Count) FQDNs para analizar." -ForegroundColor Yellow
+Write-Host "--- Iniciando prueba DNS contra el Servidor $ResolverIP ---" -ForegroundColor Cyan
 
 $Resultados = @()
 
-# 2. Obtener Zonas DNS Privadas
-Write-Host "Iniciando escaneo de Zonas y cruce con IPs Públicas..." -ForegroundColor Cyan
-$Zonas = Get-AzPrivateDnsZone
 
-foreach ($Zona in $Zonas) {
-    $RecordSets = Get-AzPrivateDnsRecordSet -ResourceGroupName $Zona.ResourceGroupName -ZoneName $Zona.Name -RecordType A
+<# foreach ($Item in $Inventario) {
+    Write-Host "Consultando: $($Item.FQDN)... " -NoNewline
     
-    foreach ($Record in $RecordSets) {
-        # Construir FQDN
-        $Fqdn = if ($Record.Name -eq "@") { $Zona.Name } else { "$($Record.Name).$($Zona.Name)" }
+    try {
+        # Usamos Resolve-DnsName para obtener un objeto estructurado en lugar de texto plano
+        $DnsResult = Resolve-DnsName -Name $Item.FQDN -Server $ResolverIP -ErrorAction Stop -Tcp
         
-        foreach ($IpPrivada in $Record.Records.Ipv4Address) {
-            Write-Host "Procesando: $Fqdn" -ForegroundColor Gray
-            
-            $IpPublica = "No encontrada / Solo Interno"
-            
-            try {
-                # 3. Intentar resolver el FQDN usando DNS Público (Google)
-                # Nota: Si el FQDN contiene 'privatelink', intentamos resolver también el nombre base
-                $NombreABuscar = $Fqdn.Replace(".privatelink.", ".")
-                $ResolucionPublica = Resolve-DnsName -Name $NombreABuscar -Server 8.8.8.8 -ErrorAction SilentlyContinue | Where-Object {$_.Type -eq "A"}
-                
-                if ($ResolucionPublica) {
-                    $IpPublica = $ResolucionPublica[0].IPAddress
-                }
-            } catch {
-                $IpPublica = "N/A"
-            }
+        # Filtramos para obtener el registro A (la IP) y el CNAME (el nombre canónico detrás del alias)
+        $RecordA = $DnsResult | Where-Object { $_.Type -eq 'A' } | Select-Object -First 1
+        $RecordCNAME = $DnsResult | Where-Object { $_.Type -eq 'CNAME' } | Select-Object -First 1
 
-            # Guardar resultados
+        if ($RecordA) {
+            $IpResuelta = $RecordA.IPAddress
+            # Si hay CNAME lo tomamos, si no, usamos el FQDN original
+            $NombreResolucion = if ($RecordCNAME) { $RecordCNAME.NameHost } else { $Item.FQDN }
+            
+            # Evaluar si la IP es de un rango privado (RFC 1918)
+            $EsPrivada = $IpResuelta -match "^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)"
+            $Estado = if ($EsPrivada) { "OK (PRIVADO)" } else { "ALERTA (PÚBLICO/HUÉRFANO)" }
+            
             $Resultados += [PSCustomObject]@{
-                'FQDN'              = $Fqdn
-                'IP_Privada_Azure'  = $IpPrivada
-                'IP_Publica_Global' = $IpPublica
-                'Zona_DNS'          = $Zona.Name
-                'Estado'            = if ($IpPrivada -eq $IpPublica) { "Error: IP Pública en Zona Privada" } else { "OK (Diferentes)" }
+                ServidorDNS    = $ResolverIP
+                Recurso_Nombre = $Item.Nombre
+                FQDN           = $Item.FQDN
+                Nombre_CNAME   = $NombreResolucion
+                IP_Resuelta    = $IpResuelta
+                Estado         = $Estado
             }
+            
+            if ($EsPrivada) { Write-Host "Privado ($IpResuelta)" -ForegroundColor Green }
+            else { Write-Host "PÚBLICO ($IpResuelta)" -ForegroundColor Red }
+        } else {
+            Write-Host "No se encontró registro A" -ForegroundColor DarkGray
         }
+    } catch {
+        Write-Host "Timeout o no resolvió" -ForegroundColor DarkGray
+        
+        # Opcional: Registrar también los que fallan
+        $Resultados += [PSCustomObject]@{
+            ServidorDNS    = $ResolverIP
+            Recurso_Nombre = $Item.Nombre
+            FQDN           = $Item.FQDN
+            Nombre_CNAME   = "N/A"
+            IP_Resuelta    = "Sin resolución"
+            Estado         = "ERROR/TIMEOUT"
+        }
+    } 
+}#>
+
+# 4. Probar DNS usando nslookup con Parser inteligente
+foreach ($Item in $Inventario) {
+    Write-Host "Consultando: $($Item.FQDN)... " -NoNewline
+    
+    # Ejecutamos nslookup
+    $Lookup = nslookup $($Item.FQDN) $ResolverIP 2>&1 | Out-String
+    
+    $IpResuelta = "N/A"
+    $NombreRespuesta = "N/A"
+    $IsAnswerSection = $false
+    
+    # Analizamos la respuesta línea por línea para ignorar la IP del servidor DNS
+    $Lines = $Lookup -split '\r?\n'
+
+    foreach ($Line in $Lines) {
+        # 1. Detectar el inicio de la resolución real (ignora la cabecera del servidor)
+        if ($Line -match "(?i)(Non-authoritative answer|Respuesta no autoritativa)") {
+            $IsAnswerSection = $true
+        }
+        # 2. Capturar el Nombre / CNAME (Funciona en Windows y Linux)
+        elseif ($Line -match "^(?i)(Name|Nombre):\s+(.+)$") {
+            $NombreRespuesta = $matches[2].Trim()
+            $IsAnswerSection = $true
+        }
+        # 3. Capturar CNAME alternativo en formato Linux
+        elseif ($Line -match "(?i)canonical name = (.+)\.?$") {
+            $NombreRespuesta = $matches[1].Trim().TrimEnd('.')
+            $IsAnswerSection = $true
+        }
+        # 4. Capturar la IP (Address) SOLO si ya estamos en la sección de respuesta
+        elseif ($IsAnswerSection -and $Line -match "^(?i)Address:\s+([0-9\.]+)") {
+            $IpResuelta = $matches[1].Trim()
+        }
+    }
+
+    # Evaluación del resultado final
+    if ($IpResuelta -ne "N/A") {
+        $EsPrivada = $IpResuelta -match "^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)"
+        $Estado = if ($EsPrivada) { "OK (PRIVADO)" } else { "ALERTA (PÚBLICO)" }
+        
+        if ($EsPrivada) { Write-Host "Privado ($IpResuelta)" -ForegroundColor Green }
+        else { Write-Host "PÚBLICO ($IpResuelta)" -ForegroundColor Red }
+    } else {
+        $Estado = "NO RESOLVIÓ / TIMEOUT"
+        Write-Host "No resolvió" -ForegroundColor DarkGray
+    }
+
+    # Guardamos en el inventario con los nombres exactos que solicitaste
+    $Resultados += [PSCustomObject]@{
+        ServidorDNS    = $ResolverIP
+        Recurso_Nombre = $Item.Nombre
+        FQDN           = $Item.FQDN
+        Nombre_CNAME   = $NombreRespuesta
+        IP_Resuelta    = $IpResuelta
+        Estado         = $Estado
     }
 }
 
-# 4. Exportar a CSV
-$Path = ".\Auditoria_IPs_Publicas_Privadas.csv"
-$Resultados | Export-Csv -Path $Path -NoTypeInformation -Encoding UTF8
-Write-Host "`nReporte generado con éxito en: $Path" -ForegroundColor Green
+<# # 5. Guardar el reporte
+if ($Resultados.Count -gt 0) {
+    $Path = "C:\Auditoria_DNS_PaaS.csv" # Puedes cambiar la ruta aquí
+    $Resultados | Export-Csv -Path $Path -NoTypeInformation -Encoding UTF8 -Force
+    
+    # Muestra una tabla interactiva en pantalla
+    $Resultados | Out-GridView -Title "Resultados de Resolución DNS - Desarrollo"
+    
+    Write-Host "`nArchivo generado exitosamente en: $Path" -ForegroundColor Green
+} #>
 
-# Mostrar un resumen en pantalla
-$Resultados | Select-Object FQDN, IP_Privada_Azure, IP_Publica_Global, Estado | Format-Table -AutoSize
+# 5. Guardar el reporte en el Escritorio
+if ($Resultados.Count -gt 0) {
+    # Definimos la ruta en tu escritorio personal
+    $RutaEscritorio = "$([Environment]::GetFolderPath('Desktop'))\Reporte_Auditoria_DNS.csv"
+    
+    # Exportamos a CSV (formato que abre Excel)
+    $Resultados | Export-Csv -Path $RutaEscritorio -NoTypeInformation -Encoding UTF8 -Delimiter ","
+    
+    Write-Host "`n====================================================" -ForegroundColor Cyan
+    Write-Host "¡REPORTE GENERADO!" -ForegroundColor Green
+    Write-Host "Ruta: $RutaEscritorio" -ForegroundColor Yellow
+    Write-Host "====================================================`n"
+    
+    # OPCIONAL: Abre el archivo automáticamente en Excel
+    # Invoke-Item $RutaEscritorio
+}
