@@ -1,0 +1,38 @@
+AzureDiagnostics
+| where hostname_s contains "bursatil-tramites-api.cnbv.gob.mx"
+| where Category in ("ApplicationGatewayFirewallLog", "FrontdoorWebApplicationFirewallLog")
+// --- MAGIA DE AUTOMATIZACIÓN ---
+// Extrae automáticamente si es ARGS, COOKIES, HEADERS, etc.
+| extend TipoVariable = extract(@"\[([A-Z_]+):([^:]+):", 1, details_data_s)
+// Extrae el nombre exacto del parámetro (Lo que pones en el Selector)
+| extend SelectorExclusion = extract(@"\[([A-Z_]+):([^:]+):", 2, details_data_s)
+// --------------------------------
+| project
+    TimeGenerated,
+    Resource,
+    requestUri_s,
+    ruleId_s,
+    action_s,
+    TipoVariable,       // <-- NUEVO: Para saber qué Match Variable usar
+    SelectorExclusion,  // <-- NUEVO: Copia y pega esto directo en tu CLI/Portal
+    Message,
+    details_message_s,
+    details_data_s,
+    clientIp_s
+| order by TimeGenerated desc
+
+
+
+
+AzureDiagnostics
+| where hostname_s contains "bursatil-tramites-api.cnbv.gob.mx"
+| project
+    TimeGenerated,
+    Resource,
+    requestUri_s,
+    Message,
+    details_message_s,
+    details_data_s,
+    ruleId_s,
+    action_s,
+    clientIp_s
