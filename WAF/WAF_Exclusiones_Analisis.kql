@@ -36,3 +36,10 @@ AzureDiagnostics
     ruleId_s,
     action_s,
     clientIp_s
+
+AzureDiagnostics
+| where ResourceProvider == "MICROSOFT.NETWORK"
+| where Category == "ApplicationGatewayAccessLog"
+| where httpStatus_d >= 400
+| project TimeGenerated, Resource, httpStatus_d, requestUri_s, httpMethod_s, clientIp_s, userAgent_s
+| order by TimeGenerated desc
