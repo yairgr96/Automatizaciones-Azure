@@ -38,8 +38,8 @@ AzureDiagnostics
     clientIp_s
 
 AzureDiagnostics
-| where ResourceProvider == "MICROSOFT.NETWORK"
 | where Category == "ApplicationGatewayAccessLog"
+| where host_s == "supervision-acciones-dev.cnbv.gob.mx"
 | where httpStatus_d >= 400
-| project TimeGenerated, Resource, httpStatus_d, requestUri_s, httpMethod_s, clientIp_s, userAgent_s
+| project TimeGenerated, host_s, httpStatus_d, httpMethod_s, requestUri_s, clientIp_s, clientPort_d, error_info_s
 | order by TimeGenerated desc
