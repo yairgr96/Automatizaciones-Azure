@@ -87,7 +87,7 @@ foreach ($app in $ConfiguracionDeApps) {
     $settingsName = "BES$($prefijo)-$sub"
     
     # Nomenclatura estricta WAF solicitada
-    $wafPolicyName = "Pwaf-$sub-prod-eastus-001" 
+    $wafPolicyName = "Pwaf-$sub-eastus-001" 
 
     # --- 0. CREACIÓN DE LA POLÍTICA WAF POR SITIO ---
     $wafPolicy = $null
